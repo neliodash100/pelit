@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Mario - 67 tasoa</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            border: 4px solid #000;
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+        #ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            color: #fff;
+            font-size: 18px;
+            font-weight: bold;
+            text-shadow: 2px 2px #000;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+            pointer-events: none;
+        }
+        #levelInfo { color: #FFD700; }
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 20px;
+            color: #fff;
+            font-size: 14px;
+            text-shadow: 1px 1px #000;
+            opacity: 0.8;
+            font-family: monospace;
+        }
+        #levelComplete {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9);
+            color: #FFD700;
+            padding: 30px 50px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+            border: 3px solid #FFD700;
+        }
+        #levelComplete h2 { font-size: 32px; margin-bottom: 10px; }
+        #levelComplete p { font-size: 18px; color: #fff; }
+        #levelSelect {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.95);
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+            max-height: 80vh;
+            overflow-y: auto;
+            border: 3px solid #FFD700;
+        }
+        #levelSelect h3 { color: #FFD700; margin-bottom: 15px; text-align: center; }
+        .level-btn {
+            display: inline-block;
+            width: 50px;
+            height: 50px;
+            margin: 5px;
+            background: #333;
+            color: #fff;
+            border: 2px solid #555;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+        .level-btn:hover { background: #FFD700; color: #000; }
+        .level-btn.unlocked { border-color: #00AA00; }
+        .level-btn.current { background: #FFD700; color: #000; border-color: #fff; }
+        #menuBtn {
+            position: absolute;
+            top: 10px;
+            right: 20px;
+            background: #333;
+            color: #fff;
+            border: 2px solid #fff;
+            padding: 5px 15px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="game" width="800" height="450"></canvas>
+        <div id="ui">
+            <span id="score">Pisteet: 0</span>
+            <span id="levelInfo">Taso: 1/67</span>
+            <span id="world">Maailma: 1-1</span>
+        </div>
+        <div id="instructions">A = vasemmalle | D = oikealle | W/Space = hyppää | Escape = tasovalikko</div>
+        <button id="menuBtn">ESC = Tasot</button>
+        <div id="levelComplete">
+            <h2>Taso Läpi!</h2>
+            <p>Pisteesi: <span id="levelScore">0</span></p>
+        </div>
+        <div id="levelSelect">
+            <h3>Valitse Taso</h3>
+            <div id="levelButtons"></div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const levelInfoEl = document.getElementById('levelInfo');
+        const worldEl = document.getElementById('world');
+        const levelCompleteEl = document.getElementById('levelComplete');
+        const levelScoreEl = document.getElementById('levelScore');
+        const levelSelectEl = document.getElementById('levelSelect');
+        const levelButtonsEl = document.getElementById('levelButtons');
+
+        const BASE_GRAVITY = 0.65;
+        const BASE_JUMP_FORCE = -13.5;
+        const BASE_SPEED = 5;
+        const CAMERA_SPEED = 3;
+
+        let score = 0;
+        let currentLevel = 1;
+        let maxUnlocked = parseInt(localStorage.getItem('maxLevel') || '1');
+        let keys = {};
+        let gameRunning = true;
+        let camera = { x: 0 };
+        let levelTransition = 0;
+
+        const themes = {
+            overworld: { bg: '#5C94FC', ground: '#00AA00', accent: '#8B4513' },
+            forest: { bg: '#1a472a', ground: '#2d5a27', accent: '#4a3728' },
+            cave: { bg: '#2d2d2d', ground: '#4a4a4a', accent: '#6b6b6b' },
+            water: { bg: '#1e90ff', ground: '#006400', accent: '#228be6' },
+            sky: { bg: '#87ceeb', ground: '#90ee90', accent: '#ffd700' },
+            castle: { bg: '#4a0000', ground: '#2d2d2d', accent: '#8b0000' },
+            boss: { bg: '#1a0000', ground: '#3a0000', accent: '#ff0000' }
+        };
+
+        const themeOrder = [
+            'overworld','overworld','overworld','overworld','overworld','overworld','overworld','overworld','overworld','overworld',
+            'forest','forest','forest','forest','forest','forest','forest','forest','forest','forest',
+            'cave','cave','cave','cave','cave','cave','cave','cave','cave','cave',
+            'water','water','water','water','water','water','water','water','water','water',
+            'sky','sky','sky','sky','sky','sky','sky','sky','sky','sky',
+            'castle','castle','castle','castle','castle','castle','castle','castle','castle','castle',
+            'boss'
+        ];
+
+        const player = {
+            x: 100, y: 300, width: 28, height: 28,
+            vx: 0, vy: 0,
+            onGround: false, facingRight: true,
+            small: true, invincible: 0
+        };
+
+        let platforms = [];
+        let blocks = [];
+        let enemies = [];
+        let coins = [];
+        let particles = [];
+        let levelGoal = { x: 0, y: 0, width: 40, height: 60 };
+
+        function getLevelData(level) {
+            const theme = themes[themeOrder[level - 1]];
+            const difficulty = level - 1;
+            const baseWidth = 3000 + level * 150;
+
+            let data = {
+                width: baseWidth,
+                theme: theme,
+                platforms: [
+                    { x: 0, y: 400, width: 300, height: 50 }
+                ],
+                blocks: [],
+                enemies: [],
+                coins: [],
+                goal: { x: baseWidth - 100, y: 340 }
+            };
+
+            let lastX = 300;
+            let lastY = 400;
+
+            for (let i = 0; i < 15 + difficulty * 2; i++) {
+                    const platformWidth = Math.max(40, 100 - difficulty * 5);
+                    const platformX = lastX + 100 + difficulty * 10;
+                    const platformY = Math.min(lastY + (Math.random() > 0.5 ? -1 : 1) * (30 + difficulty * 5), 380);
+                    const platformH = Math.max(15, 20 - difficulty);
+
+                    data.platforms.push({
+                        x: platformX,
+                        y: platformY,
+                        width: platformWidth,
+                        height: platformH
+                    });
+
+                    if (Math.random() > 0.3) {
+                        data.blocks.push({
+                            x: platformX + platformWidth / 2 - 16,
+                            y: platformY - 35 - (difficulty * 3),
+                            width: 32, height: 32,
+                            type: Math.random() > 0.5 ? 'question' : 'brick'
+                        });
+                    }
+
+                    lastX = platformX + platformWidth;
+                    lastY = platformY;
+                }
+            }
+
+            data.platforms.push({ x: lastX + 50, y: 400, width: 400, height: 50 });
+
+            const numEnemies = Math.min(2 + difficulty, 15);
+            for (let i = 0; i < numEnemies; i++) {
+                const ex = 500 + i * (200 + difficulty * 30);
+                data.enemies.push({
+                    x: ex,
+                    y: 368,
+                    width: 28, height: 28,
+                    vx: -1 - difficulty * 0.2,
+                    alive: true,
+                    startX: ex,
+                    range: 80 + difficulty * 10
+                });
+            }
+
+            for (let i = 0; i < 10 + level * 2; i++) {
+                data.coins.push({
+                    x: 200 + i * (80 + difficulty * 8),
+                    y: 180 + (i % 3) * 80,
+                    width: 16, height: 16,
+                    collected: false,
+                    baseY: 180 + (i % 3) * 80,
+                    anim: i * 0.5
+                });
+            }
+
+            if (level % 10 === 0) {
+                for (let i = 0; i < 3; i++) {
+                    data.blocks.push({
+                        x: 700 + i * 60,
+                        y: 300,
+                        width: 56, height: 56,
+                        type: 'brick'
+                    });
+                }
+            }
+
+            return data;
+        }
+
+        function loadLevel(level) {
+            currentLevel = level;
+            const data = getLevelData(level);
+
+            player.x = 100;
+            player.y = 300;
+            player.vx = 0;
+            player.vy = 0;
+            player.onGround = false;
+
+            camera = { x: 0 };
+            blocks = data.blocks;
+            enemies = data.enemies;
+            coins = data.coins;
+            levelGoal = { x: data.goal.x, y: data.goal.y, width: 40, height: 60 };
+
+            platforms = data.platforms.map(p => ({...p}));
+
+            levelInfoEl.textContent = `Taso: ${level}/67`;
+            const world = Math.floor((level - 1) / 10) + 1;
+            const levelInWorld = ((level - 1) % 10) + 1;
+            worldEl.textContent = `Maailma: ${world}-${levelInWorld}`;
+
+            levelTransition = 60;
+            gameRunning = true;
+            updateLevelButtons();
+        }
+
+        function updateLevelButtons() {
+            levelButtonsEl.innerHTML = '';
+            for (let i = 1; i <= 67; i++) {
+                const btn = document.createElement('button');
+                btn.className = 'level-btn' + (i <= maxUnlocked ? ' unlocked' : '') + (i === currentLevel ? ' current' : '');
+                btn.textContent = i;
+                btn.onclick = () => {
+                    if (i <= maxUnlocked) {
+                        loadLevel(i);
+                        levelSelectEl.style.display = 'none';
+                    }
+                };
+                levelButtonsEl.appendChild(btn);
+            }
+        }
+
+        document.addEventListener('keydown', e => {
+            keys[e.code] = true;
+            if (e.code === 'Escape') {
+                levelSelectEl.style.display = levelSelectEl.style.display === 'none' ? 'block' : 'none';
+            }
+        });
+        document.addEventListener('keyup', e => keys[e.code] = false);
+        document.getElementById('menuBtn').onclick = () => {
+            levelSelectEl.style.display = 'block';
+        };
+
+        function checkCollision(a, b) {
+            return a.x < b.x + b.width && a.x + a.width > b.x &&
+                   a.y < b.y + b.height && a.y + a.height > b.y;
+        }
+
+        function playerDeath() {
+            player.x = 100;
+            player.y = 100;
+            player.vy = 0;
+            score = Math.max(0, score - 50);
+            scoreEl.textContent = 'Pisteet: ' + score;
+        }
+
+        function getDifficultyAdjustedValues(level) {
+            const levelFactor = (level - 1) / 66;
+            return {
+                gravity: BASE_GRAVITY + levelFactor * 0.2,
+                jumpForce: BASE_JUMP_FORCE - levelFactor * 1.5,
+                speed: BASE_SPEED - levelFactor * 0.8
+            };
+        }
+
+        function update() {
+            if (!gameRunning) return;
+            if (levelTransition > 0) {
+                levelTransition--;
+                return;
+            }
+
+            const diff = getDifficultyAdjustedValues(currentLevel);
+
+            if (keys['KeyA']) {
+                player.vx = -diff.speed;
+                player.facingRight = false;
+            } else if (keys['KeyD']) {
+                player.vx = diff.speed;
+                player.facingRight = true;
+            } else {
+                player.vx = 0;
+            }
+
+            if ((keys['KeyW'] || keys['Space']) && player.onGround) {
+                player.vy = diff.jumpForce;
+                player.onGround = false;
+            }
+
+            player.vy += diff.gravity;
+            player.x += player.vx;
+            player.y += player.vy;
+
+            if (player.x < 0) player.x = 0;
+
+            player.onGround = false;
+
+            platforms.forEach(p => {
+                if (checkCollision(player, p)) {
+                    if (player.vy > 0 && player.y + player.height - player.vy <= p.y) {
+                        player.y = p.y - player.height;
+                        player.vy = 0;
+                        player.onGround = true;
+                    }
+                }
+            });
+
+            player.onGround = false;
+
+            platforms.forEach(p => {
+                if (checkCollision(player, p)) {
+                    if (player.vy > 0 && player.y + player.height - player.vy <= p.y) {
+                        player.y = p.y - player.height;
+                        player.vy = 0;
+                        player.onGround = true;
+                    }
+                }
+            });
+
+            blocks.forEach(b => {
+                if (checkCollision(player, b)) {
+                    const overlapLeft = (player.x + player.width) - b.x;
+                    const overlapRight = (b.x + b.width) - player.x;
+                    const overlapTop = (player.y + player.height) - b.y;
+                    const overlapBottom = (b.y + b.height) - player.y;
+                    const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+                    if (minOverlap === overlapTop && player.vy > 0) {
+                        player.y = b.y - player.height;
+                        player.vy = 0;
+                        player.onGround = true;
+                    } else if (minOverlap === overlapBottom && player.vy < 0) {
+                        player.y = b.y + b.height;
+                        player.vy = 0;
+                        if (b.type === 'question') {
+                            b.type = 'brick';
+                            score += 50;
+                            scoreEl.textContent = 'Pisteet: ' + score;
+                        }
+                    } else if (minOverlap === overlapLeft) {
+                        player.x = b.x - player.width;
+                    } else if (minOverlap === overlapRight) {
+                        player.x = b.x + b.width;
+                    }
+                }
+            });
+
+            coins.forEach(c => {
+                if (!c.collected && checkCollision(player, c)) {
+                    c.collected = true;
+                    score += 100;
+                    scoreEl.textContent = 'Pisteet: ' + score;
+                }
+            });
+
+            enemies.forEach(e => {
+                if (!e.alive) return;
+                e.x += e.vx;
+                if (e.x < e.startX - e.range || e.x > e.startX + e.range) e.vx *= -1;
+
+                if (checkCollision(player, e)) {
+                    if (player.vy > 0 && player.y < e.y) {
+                        e.alive = false;
+                        player.vy = -8;
+                        score += 200;
+                        scoreEl.textContent = 'Pisteet: ' + score;
+                    } else {
+                        player.x = 100;
+                        player.y = 300;
+                        score = Math.max(0, score - 100);
+                        scoreEl.textContent = 'Pisteet: ' + score;
+                    }
+                }
+            });
+
+            if (checkCollision(player, levelGoal)) {
+                levelCompleteEl.style.display = 'block';
+                levelScoreEl.textContent = score;
+                gameRunning = false;
+
+                setTimeout(() => {
+                    if (currentLevel < 67) {
+                        currentLevel++;
+                        if (currentLevel > maxUnlocked) {
+                            maxUnlocked = currentLevel;
+                            localStorage.setItem('maxLevel', maxUnlocked);
+                        }
+                        loadLevel(currentLevel);
+                    } else {
+                        alert('Onneksi! Voitit koko pelin!');
+                    }
+                    levelCompleteEl.style.display = 'none';
+                }, 2000);
+            }
+
+            const targetCamera = player.x - 300;
+            const maxCamera = Math.max(0, platforms[0].width - canvas.width);
+            camera.x += (Math.max(0, Math.min(targetCamera, maxCamera)) - camera.x) * 0.1;
+        }
+
+        function draw() {
+            const theme = themes[themeOrder[currentLevel - 1]];
+            ctx.fillStyle = theme.bg;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(-camera.x, 0);
+
+            platforms.forEach(p => {
+                ctx.fillStyle = theme.ground;
+                ctx.fillRect(p.x, p.y, p.width, p.height);
+                ctx.fillStyle = theme.accent;
+                for (let i = 0; i < p.width; i += 20) {
+                    ctx.fillRect(p.x + i, p.y, 10, 5);
+                }
+            });
+
+            blocks.forEach(b => {
+                ctx.fillStyle = b.type === 'question' ? '#FFCC00' : '#D46A31';
+                ctx.fillRect(b.x, b.y, b.width, b.height);
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(b.x, b.y, b.width, b.height);
+                if (b.type === 'question') {
+                    ctx.fillStyle = '#8B6914';
+                    ctx.font = 'bold 20px Arial';
+                    ctx.fillText('?', b.x + 10, b.y + 24);
+                }
+            });
+
+            coins.forEach(c => {
+                if (!c.collected) {
+                    c.anim += 0.1;
+                    const yOff = Math.sin(c.anim) * 3;
+                    ctx.fillStyle = '#FFD700';
+                    ctx.fillRect(c.x, c.y + yOff, c.width, c.height);
+                    ctx.fillStyle = '#FFA500';
+                    ctx.fillRect(c.x + 4, c.y + yOff - 4, 8, 4);
+                }
+            });
+
+            enemies.forEach(e => {
+                if (e.alive) {
+                    ctx.fillStyle = '#883300';
+                    ctx.fillRect(e.x, e.y, e.width, e.height);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillRect(e.x + 4, e.y + 6, 8, 4);
+                    ctx.fillRect(e.x + 16, e.y + 6, 8, 4);
+                }
+            });
+
+            ctx.fillStyle = '#FFD700';
+            ctx.fillRect(levelGoal.x, levelGoal.y, levelGoal.width, levelGoal.height);
+            ctx.fillStyle = '#FFA500';
+            ctx.fillRect(levelGoal.x + 5, levelGoal.y + 5, 10, 30);
+            ctx.fillRect(levelGoal.x + 25, levelGoal.y + 5, 10, 30);
+
+            const pSize = player.small ? 28 : 40;
+            const pOff = player.small ? 0 : -12;
+            ctx.fillStyle = player.facingRight ? '#E70010' : '#B00008';
+            ctx.fillRect(player.x, player.y + pOff, player.width, player.small ? player.height : 40);
+            ctx.fillStyle = '#FFDABB';
+            ctx.fillRect(player.x + 6, player.y + pOff + 4, 8, 8);
+            ctx.fillRect(player.x + player.width - 14, player.y + pOff + 4, 8, 8);
+
+            if (levelTransition > 0) {
+                ctx.fillStyle = `rgba(0,0,0,${levelTransition/60})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#FFD700';
+                ctx.font = 'bold 40px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(`Taso ${currentLevel}`, canvas.width/2, canvas.height/2);
+                ctx.textAlign = 'left';
+            }
+
+            ctx.restore();
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        loadLevel(currentLevel);
+        gameLoop();
+    </script>
+</body>
+</html>
